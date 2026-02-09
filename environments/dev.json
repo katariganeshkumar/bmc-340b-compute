@@ -48,7 +48,7 @@
     "ParameterValue": "true"
   },
   {
-    "ParameterKey": "TemplateBucket",
-    "ParameterValue": "your-s3-bucket-name"
+    "ParameterKey": "TemplateBucketName",
+    "ParameterValue": "your-cf-templates-bucket"
   }
 ]

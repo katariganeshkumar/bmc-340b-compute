@@ -8,13 +8,16 @@ This CloudFormation template creates a HIPAA-compliant EC2 Auto Scaling Group wi
 
 ```
 compute/
-├── main.yaml                    # Main CloudFormation template
-├── parameters.json              # Default parameters file
-├── templates/                   # Reusable CloudFormation templates
+├── main.yaml                    # Main CloudFormation template (orchestrates nested stacks)
+├── deploy.sh                    # Deployment script
+├── templates/                   # Reusable CloudFormation templates (nested stacks)
 │   ├── kms.yaml                # KMS encryption template
 │   ├── security-groups.yaml    # Security groups template
 │   ├── iam.yaml                # IAM roles and policies template
 │   ├── logging.yaml            # CloudWatch Logs and VPC Flow Logs template
+│   ├── alb.yaml                # Application Load Balancer template
+│   ├── ec2.yaml                # EC2 Launch Template
+│   ├── autoscaling.yaml        # Auto Scaling Group template
 │   └── README.md               # Templates documentation
 ├── environments/                # Environment-specific parameter files
 │   ├── dev.json                # Development environment
@@ -26,32 +29,17 @@ compute/
 
 ### Key Files
 
-- **`main.yaml`**: Main CloudFormation template that orchestrates nested stacks from `templates/`
-- **`parameters.json`**: Default parameter values (update with your VPC/subnet IDs and S3 bucket)
-- **`templates/`**: Reusable CloudFormation templates deployed as nested stacks:
-  - `kms.yaml` - KMS encryption
-  - `logging.yaml` - CloudWatch Logs and VPC Flow Logs
-  - `security-groups.yaml` - Security groups
-  - `iam.yaml` - IAM roles and policies
-- **`environments/`**: Environment-specific parameter files for dev/staging/prod
-- **`deploy.sh`**: Deployment script that uploads templates and deploys the stack
-- **`DEPLOYMENT.md`**: Detailed deployment guide
-
-## Architecture: Nested Stacks
-
-The `main.yaml` template uses **nested CloudFormation stacks** to deploy modular components:
-
-1. **KMSStack** → Creates KMS key for encryption
-2. **LoggingStack** → Creates CloudWatch Log Groups and VPC Flow Logs (depends on KMSStack)
-3. **SecurityGroupsStack** → Creates security groups for ALB and EC2
-4. **IAMStack** → Creates IAM roles and policies (depends on LoggingStack and KMSStack)
-5. **Main Stack** → Creates ALB, EC2 Launch Template, Auto Scaling Group, and CloudWatch Alarms
-
-**Benefits:**
-- ✅ Modular and maintainable
-- ✅ Templates can be reused
-- ✅ Independent updates
-- ✅ Better error isolation
+- **`main.yaml`**: Main CloudFormation template that orchestrates nested stacks
+- **`templates/`**: Individual template files deployed as nested stacks
+  - `kms.yaml`: KMS encryption
+  - `security-groups.yaml`: Security groups
+  - `iam.yaml`: IAM roles and policies
+  - `logging.yaml`: CloudWatch Logs and VPC Flow Logs
+  - `alb.yaml`: Application Load Balancer, Target Group, Listeners
+  - `ec2.yaml`: EC2 Launch Template
+  - `autoscaling.yaml`: Auto Scaling Group, Scaling Policies, CloudWatch Alarms
+- **`environments/`**: Environment-specific parameter files (dev/staging/prod)
+- **`deploy.sh`**: Deployment script that uploads templates to S3 and deploys stack
 
 ## HIPAA Compliance Features
 
@@ -115,41 +103,11 @@ The `main.yaml` template uses **nested CloudFormation stacks** to deploy modular
 - **AllowedCIDR**: CIDR block allowed to access ALB (default: 10.0.0.0/16 - **RESTRICT THIS FOR HIPAA**)
 - **KMSKeyId**: Existing KMS Key ID for encryption (optional, creates new key if not provided)
 - **EnableVPCFlowLogs**: Enable VPC Flow Logs (default: true, recommended for HIPAA)
-
-## Quick Start
-
-**Prerequisites:**
-1. S3 bucket for storing nested stack templates
-2. SSL certificate in ACM
-3. VPC with subnets configured
-
-**Deploy using the script:**
-```bash
-./deploy.sh <stack-name> <environment> <s3-bucket-name>
-# Example: ./deploy.sh bmc-hipaa-prod prod my-cf-templates-bucket
-```
-
-See **[DEPLOYMENT.md](DEPLOYMENT.md)** for detailed deployment instructions.
+- **TemplateBucketName**: S3 bucket name where nested stack templates are stored (required)
 
 ## Deployment
 
-### 1. Create S3 Bucket for Templates
-
-```bash
-# Create S3 bucket for nested stack templates
-aws s3 mb s3://your-cf-templates-bucket --region us-east-1
-```
-
-### 2. Upload Templates to S3
-
-```bash
-aws s3 cp templates/kms.yaml s3://your-cf-templates-bucket/templates/kms.yaml
-aws s3 cp templates/logging.yaml s3://your-cf-templates-bucket/templates/logging.yaml
-aws s3 cp templates/security-groups.yaml s3://your-cf-templates-bucket/templates/security-groups.yaml
-aws s3 cp templates/iam.yaml s3://your-cf-templates-bucket/templates/iam.yaml
-```
-
-### 3. Create SSL Certificate in ACM
+### 1. Create SSL Certificate in ACM
 
 ```bash
 # Request a certificate (if you don't have one)
@@ -162,17 +120,23 @@ aws acm request-certificate \
 aws acm list-certificates --region us-east-1
 ```
 
-### 4. Update Parameters File
+### 2. Create S3 Bucket for Templates
 
-Choose the appropriate environment file or edit `parameters.json` with your actual values:
+Nested stacks require templates to be stored in S3:
 
-**Important:** Add the `TemplateBucket` parameter with your S3 bucket name:
-```json
-{
-  "ParameterKey": "TemplateBucket",
-  "ParameterValue": "your-cf-templates-bucket"
-}
+```bash
+# Create S3 bucket (replace with your bucket name)
+aws s3 mb s3://your-cf-templates-bucket --region us-east-1
+
+# Enable versioning (recommended)
+aws s3api put-bucket-versioning \
+  --bucket your-cf-templates-bucket \
+  --versioning-configuration Status=Enabled
 ```
+
+### 3. Update Environment Parameters
+
+Edit the appropriate environment file with your actual values:
 
 **For Development:**
 ```bash
@@ -187,11 +151,6 @@ Choose the appropriate environment file or edit `parameters.json` with your actu
 **For Production:**
 ```bash
 # Edit environments/prod.json
-```
-
-**Or use default:**
-```bash
-# Edit parameters.json
 ```
 
 ```json
@@ -211,56 +170,69 @@ Choose the appropriate environment file or edit `parameters.json` with your actu
 
 **IMPORTANT**: For HIPAA compliance, restrict `AllowedCIDR` to your organization's IP range, not `0.0.0.0/0`.
 
-### 5. Deploy Stack
+### 4. Deploy Stack
 
-**Using default parameters:**
-```bash
-aws cloudformation create-stack \
-  --stack-name bmc-hipaa-autoscaling-alb \
-  --template-body file://main.yaml \
-  --parameters file://parameters.json \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC
-```
+**Option 1: Using Deployment Script (Recommended)**
 
-**Using environment-specific parameters:**
 ```bash
 # Development
-aws cloudformation create-stack \
-  --stack-name bmc-hipaa-dev \
-  --template-body file://main.yaml \
-  --parameters file://environments/dev.json \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC Key=Environment,Value=dev
+./deploy.sh dev your-cf-templates-bucket
 
 # Staging
-aws cloudformation create-stack \
-  --stack-name bmc-hipaa-staging \
-  --template-body file://main.yaml \
-  --parameters file://environments/staging.json \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC Key=Environment,Value=staging
+./deploy.sh staging your-cf-templates-bucket
 
 # Production
-aws cloudformation create-stack \
-  --stack-name bmc-hipaa-prod \
-  --template-body file://main.yaml \
-  --parameters file://environments/prod.json \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC Key=Environment,Value=prod
+./deploy.sh prod your-cf-templates-bucket
 ```
 
-### 6. Update Stack (if needed)
+**Option 2: Manual Deployment**
 
 ```bash
-aws cloudformation update-stack \
-  --stack-name bmc-hipaa-autoscaling-alb \
-  --template-body file://main.yaml \
-  --parameters file://parameters.json \
+# 1. Upload templates to S3
+aws s3 sync templates/ s3://your-cf-templates-bucket/templates/ \
+  --exclude "*.md" --exclude "README.md"
+
+# 2. Deploy stack (Development example)
+aws cloudformation deploy \
+  --template-file main.yaml \
+  --stack-name bmc-hipaa-dev \
+  --parameter-overrides file://environments/dev.json TemplateBucketName=your-cf-templates-bucket \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --tags Compliance=HIPAA Application=BMC Environment=dev
+
+# 3. For Staging
+aws cloudformation deploy \
+  --template-file main.yaml \
+  --stack-name bmc-hipaa-staging \
+  --parameter-overrides file://environments/staging.json TemplateBucketName=your-cf-templates-bucket \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --tags Compliance=HIPAA Application=BMC Environment=staging
+
+# 4. For Production
+aws cloudformation deploy \
+  --template-file main.yaml \
+  --stack-name bmc-hipaa-prod \
+  --parameter-overrides file://environments/prod.json TemplateBucketName=your-cf-templates-bucket \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --tags Compliance=HIPAA Application=BMC Environment=prod
+```
+
+### 5. Update Stack (if needed)
+
+```bash
+# Update templates in S3 first
+aws s3 sync templates/ s3://your-cf-templates-bucket/templates/ \
+  --exclude "*.md" --exclude "README.md"
+
+# Then update stack
+aws cloudformation deploy \
+  --template-file main.yaml \
+  --stack-name bmc-hipaa-dev \
+  --parameter-overrides file://environments/dev.json TemplateBucketName=your-cf-templates-bucket \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-### 7. Delete Stack
+### 6. Delete Stack
 
 **Note**: ALB has deletion protection enabled. Disable it first:
 

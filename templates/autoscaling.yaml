@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Auto Scaling Group Template for HIPAA-Compliant Infrastructure'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Stack name for resource naming
+  
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: First private subnet ID for EC2 instances
+  
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second private subnet ID for EC2 instances
+  
+  LaunchTemplateId:
+    Type: String
+    Description: Launch Template ID
+  
+  LaunchTemplateVersion:
+    Type: String
+    Description: Launch Template version
+  
+  TargetGroupARN:
+    Type: String
+    Description: Target Group ARN for health checks
+  
+  MinSize:
+    Type: Number
+    Description: Minimum number of instances
+  
+  MaxSize:
+    Type: Number
+    Description: Maximum number of instances
+  
+  DesiredCapacity:
+    Type: Number
+    Description: Desired number of instances
+
+Resources:
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${StackName}-asg'
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplateId
+        Version: !Ref LaunchTemplateVersion
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref TargetGroupARN
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-asg-instance'
+          PropagateAtLaunch: true
+        - Key: Compliance
+          Value: HIPAA
+          PropagateAtLaunch: true
+        - Key: Application
+          Value: BMC
+          PropagateAtLaunch: true
+
+  ScalingPolicyUp:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 300
+      ScalingAdjustment: 1
+      PolicyType: SimpleScaling
+
+  ScalingPolicyDown:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 300
+      ScalingAdjustment: -1
+      PolicyType: SimpleScaling
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-cpu-high'
+      AlarmDescription: Alarm when CPU exceeds 70% - HIPAA Compliant Monitoring
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref ScalingPolicyUp
+      Tags:
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-cpu-low'
+      AlarmDescription: Alarm when CPU falls below 30% - HIPAA Compliant Monitoring
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 30
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref ScalingPolicyDown
+      Tags:
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+Outputs:
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling Group
+    Value: !Ref AutoScalingGroup
+    Export:
+      Name: !Sub '${StackName}-asg-name'

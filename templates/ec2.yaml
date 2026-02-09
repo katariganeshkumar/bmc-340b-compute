@@ -1,0 +1,197 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EC2 Launch Template for HIPAA-Compliant Infrastructure'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Stack name for resource naming
+  
+  InstanceType:
+    Type: String
+    Description: EC2 instance type
+  
+  AMIId:
+    Type: String
+    Default: ''
+    Description: Custom AMI ID (optional)
+  
+  EC2InstanceProfileArn:
+    Type: String
+    Description: ARN of the EC2 Instance Profile
+  
+  EC2SecurityGroupId:
+    Type: String
+    Description: Security Group ID for EC2 instances
+  
+  KMSKeyId:
+    Type: String
+    Default: ''
+    Description: KMS Key ID for EBS encryption
+  
+  EC2ApplicationLogsGroupName:
+    Type: String
+    Description: CloudWatch Log Group name for EC2 application logs
+
+Conditions:
+  HasCustomAMI: !Not [!Equals [!Ref AMIId, '']]
+  HasKMSKeyId: !Not [!Equals [!Ref KMSKeyId, '']]
+
+Resources:
+  EC2LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${StackName}-launch-template'
+      LaunchTemplateData:
+        ImageId: !If
+          - HasCustomAMI
+          - !Ref AMIId
+          - !Sub '{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !Ref EC2InstanceProfileArn
+        SecurityGroupIds:
+          - !Ref EC2SecurityGroupId
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              Encrypted: true
+              KmsKeyId: !If
+                - HasKMSKeyId
+                - !Ref KMSKeyId
+                - !Ref AWS::NoValue
+              VolumeSize: 20
+              VolumeType: gp3
+              DeleteOnTermination: true
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
+            
+            # Update system
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -y
+            apt-get upgrade -y
+            
+            # Install SSM Agent (if not pre-installed)
+            if ! systemctl is-active --quiet amazon-ssm-agent; then
+              snap install amazon-ssm-agent --classic
+              systemctl enable amazon-ssm-agent
+              systemctl start amazon-ssm-agent
+            fi
+            
+            # Install CloudWatch Agent
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+            dpkg -i -E ./amazon-cloudwatch-agent.deb || true
+            apt-get install -f -y
+            
+            # Install Apache
+            apt-get install -y apache2
+            systemctl start apache2
+            systemctl enable apache2
+            
+            # Configure CloudWatch Agent for HIPAA audit logging
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
+            {
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                      {
+                        "file_path": "/var/log/apache2/access.log",
+                        "log_group_name": "${EC2ApplicationLogsGroupName}",
+                        "log_stream_name": "{instance_id}-apache-access",
+                        "retention_in_days": 90
+                      },
+                      {
+                        "file_path": "/var/log/apache2/error.log",
+                        "log_group_name": "${EC2ApplicationLogsGroupName}",
+                        "log_stream_name": "{instance_id}-apache-error",
+                        "retention_in_days": 90
+                      },
+                      {
+                        "file_path": "/var/log/syslog",
+                        "log_group_name": "${EC2ApplicationLogsGroupName}",
+                        "log_stream_name": "{instance_id}-syslog",
+                        "retention_in_days": 90
+                      },
+                      {
+                        "file_path": "/var/log/auth.log",
+                        "log_group_name": "${EC2ApplicationLogsGroupName}",
+                        "log_stream_name": "{instance_id}-auth",
+                        "retention_in_days": 90
+                      }
+                    ]
+                  }
+                }
+              },
+              "metrics": {
+                "namespace": "BMC/HIPAA",
+                "metrics_collected": {
+                  "cpu": {
+                    "totalcpu": true,
+                    "measurement": [
+                      "cpu_usage_idle",
+                      "cpu_usage_iowait",
+                      "cpu_usage_user",
+                      "cpu_usage_system"
+                    ]
+                  },
+                  "disk": {
+                    "measurement": [
+                      "used_percent"
+                    ],
+                    "resources": [
+                      "*"
+                    ]
+                  },
+                  "mem": {
+                    "measurement": [
+                      "mem_used_percent"
+                    ]
+                  }
+                }
+              }
+            }
+            EOF
+            
+            # Start CloudWatch Agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+            
+            # Create basic index page (replace with BMC application deployment)
+            echo "<h1>BMC Application - HIPAA Compliant</h1><p>Instance: $(hostname)</p><p>OS: Ubuntu $(lsb_release -rs)</p><p>Deployed via CloudFormation</p>" > /var/www/html/index.html
+            
+            # Set proper permissions
+            chmod 644 /var/www/html/index.html
+            chown www-data:www-data /var/www/html/index.html
+            
+            # Enable audit logging
+            echo "BMC Application instance $(hostname) initialized at $(date)" >> /var/log/bmc-init.log
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${StackName}-ec2-instance'
+              - Key: ManagedBy
+                Value: CloudFormation
+              - Key: Compliance
+                Value: HIPAA
+              - Key: Application
+                Value: BMC
+              - Key: DataClassification
+                Value: PHI
+              - Key: OS
+                Value: Ubuntu
+
+Outputs:
+  LaunchTemplateId:
+    Description: Launch Template ID
+    Value: !Ref EC2LaunchTemplate
+    Export:
+      Name: !Sub '${StackName}-launch-template-id'
+  
+  LaunchTemplateLatestVersion:
+    Description: Latest version of the Launch Template
+    Value: !GetAtt EC2LaunchTemplate.LatestVersionNumber
+    Export:
+      Name: !Sub '${StackName}-launch-template-version'

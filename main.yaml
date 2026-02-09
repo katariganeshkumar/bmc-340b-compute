@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'HIPAA-Compliant EC2 Auto Scaling Group with Application Load Balancer for BMC Application - Private Subnets with SSM Session Manager access (Ubuntu OS) - Uses Nested Stacks'
+Description: 'HIPAA-Compliant EC2 Auto Scaling Group with Application Load Balancer for BMC Application - Main Template using Nested Stacks'
 
 Parameters:
   VpcId:
@@ -73,463 +73,182 @@ Parameters:
       - 'false'
     Description: Enable VPC Flow Logs for network traffic auditing (required for HIPAA)
   
-  TemplateBucket:
+  TemplateBucketName:
     Type: String
-    Description: S3 bucket name where nested stack templates are stored (e.g., my-cf-templates-bucket)
-  
-  TemplatePrefix:
-    Type: String
-    Default: 'templates/'
-    Description: S3 prefix/folder path for templates (default: templates/)
+    Description: S3 bucket name where nested stack templates are stored
+    Default: ''
 
 Conditions:
   HasCustomAMI: !Not [!Equals [!Ref AMIId, '']]
+  CreateKMSKey: !Equals [!Ref KMSKeyId, '']
+  HasKMSKeyId: !Not [!Equals [!Ref KMSKeyId, '']]
+  EnableFlowLogs: !Equals [!Ref EnableVPCFlowLogs, 'true']
+  UseS3Templates: !Not [!Equals [!Ref TemplateBucketName, '']]
 
 Resources:
-  # Nested Stack: KMS Key
+  # KMS Stack
   KMSStack:
     Type: AWS::CloudFormation::Stack
+    Condition: UseS3Templates
     Properties:
-      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}kms.yaml'
+      TemplateURL: !Sub 'https://${TemplateBucketName}.s3.amazonaws.com/templates/kms.yaml'
       Parameters:
         StackName: !Ref AWS::StackName
         KMSKeyId: !Ref KMSKeyId
-      Tags:
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
+      TimeoutInMinutes: 5
 
-  # Nested Stack: Logging (depends on KMS)
+  # Logging Stack
   LoggingStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: KMSStack
+    Condition: UseS3Templates
     Properties:
-      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}logging.yaml'
+      TemplateURL: !Sub 'https://${TemplateBucketName}.s3.amazonaws.com/templates/logging.yaml'
       Parameters:
         StackName: !Ref AWS::StackName
         VpcId: !Ref VpcId
-        KMSKeyId: !GetAtt KMSStack.Outputs.KMSKeyId
+        KMSKeyId: !If
+          - CreateKMSKey
+          - !GetAtt KMSStack.Outputs.KMSKeyId
+          - !Ref KMSKeyId
         EnableVPCFlowLogs: !Ref EnableVPCFlowLogs
-      Tags:
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
+      DependsOn:
+        - KMSStack
+      TimeoutInMinutes: 5
 
-  # Nested Stack: Security Groups
+  # Security Groups Stack
   SecurityGroupsStack:
     Type: AWS::CloudFormation::Stack
+    Condition: UseS3Templates
     Properties:
-      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}security-groups.yaml'
+      TemplateURL: !Sub 'https://${TemplateBucketName}.s3.amazonaws.com/templates/security-groups.yaml'
       Parameters:
         StackName: !Ref AWS::StackName
         VpcId: !Ref VpcId
         AllowedCIDR: !Ref AllowedCIDR
-      Tags:
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
+      TimeoutInMinutes: 5
 
-  # Nested Stack: IAM Roles (depends on Logging and KMS)
+  # IAM Stack
   IAMStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn:
-      - LoggingStack
-      - KMSStack
+    Condition: UseS3Templates
     Properties:
-      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}iam.yaml'
+      TemplateURL: !Sub 'https://${TemplateBucketName}.s3.amazonaws.com/templates/iam.yaml'
       Parameters:
         StackName: !Ref AWS::StackName
         EC2ApplicationLogsGroupArn: !GetAtt LoggingStack.Outputs.EC2ApplicationLogsGroupArn
-        KMSKeyArn: !GetAtt KMSStack.Outputs.KMSKeyArn
-      Tags:
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
+        KMSKeyArn: !If
+          - CreateKMSKey
+          - !GetAtt KMSStack.Outputs.KMSKeyArn
+          - !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KMSKeyId}'
+      DependsOn:
+        - LoggingStack
+        - KMSStack
+      TimeoutInMinutes: 5
 
-  # Application Load Balancer
-  ApplicationLoadBalancer:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    DependsOn: SecurityGroupsStack
+  # ALB Stack
+  ALBStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: UseS3Templates
     Properties:
-      Name: !Sub '${AWS::StackName}-alb'
-      Type: application
-      Scheme: internet-facing
-      Subnets:
-        - !Ref PublicSubnet1Id
-      SecurityGroups:
-        - !GetAtt SecurityGroupsStack.Outputs.ALBSecurityGroupId
-      LoadBalancerAttributes:
-        - Key: idle_timeout.timeout_seconds
-          Value: '60'
-        - Key: routing.http.drop_invalid_header_fields.enabled
-          Value: 'true'
-        - Key: routing.http.x_amzn_tls_version_and_cipher_suite.enabled
-          Value: 'true'
-        - Key: routing.http.xff_client_port.enabled
-          Value: 'true'
-        - Key: deletion_protection.enabled
-          Value: 'true'
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-alb'
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
+      TemplateURL: !Sub 'https://${TemplateBucketName}.s3.amazonaws.com/templates/alb.yaml'
+      Parameters:
+        StackName: !Ref AWS::StackName
+        VpcId: !Ref VpcId
+        PublicSubnet1Id: !Ref PublicSubnet1Id
+        ALBSecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.ALBSecurityGroupId
+        SSLCertificateARN: !Ref SSLCertificateARN
+      DependsOn:
+        - SecurityGroupsStack
+      TimeoutInMinutes: 10
 
-  # Target Group for ALB
-  ALBTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  # EC2 Stack
+  EC2Stack:
+    Type: AWS::CloudFormation::Stack
+    Condition: UseS3Templates
     Properties:
-      Name: !Sub '${AWS::StackName}-tg'
-      Port: 80
-      Protocol: HTTP
-      VpcId: !Ref VpcId
-      HealthCheckPath: /
-      HealthCheckProtocol: HTTP
-      HealthCheckIntervalSeconds: 30
-      HealthCheckTimeoutSeconds: 5
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 3
-      TargetType: instance
-      TargetGroupAttributes:
-        - Key: deregistration_delay.timeout_seconds
-          Value: '30'
-        - Key: stickiness.enabled
-          Value: 'false'
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-tg'
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
-
-  # ALB HTTPS Listener (Primary)
-  ALBHTTPSListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref ALBTargetGroup
-      LoadBalancerArn: !Ref ApplicationLoadBalancer
-      Port: 443
-      Protocol: HTTPS
-      Certificates:
-        - CertificateArn: !Ref SSLCertificateARN
-      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
-
-  # ALB HTTP Listener (Redirects to HTTPS)
-  ALBHTTPListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      DefaultActions:
-        - Type: redirect
-          RedirectConfig:
-            Protocol: HTTPS
-            Port: 443
-            StatusCode: HTTP_301
-      LoadBalancerArn: !Ref ApplicationLoadBalancer
-      Port: 80
-      Protocol: HTTP
-
-  # Launch Template for EC2 instances
-  EC2LaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    DependsOn:
-      - IAMStack
-      - SecurityGroupsStack
-      - LoggingStack
-    Properties:
-      LaunchTemplateName: !Sub '${AWS::StackName}-launch-template'
-      LaunchTemplateData:
-        ImageId: !If
-          - HasCustomAMI
-          - !Ref AMIId
-          - !Sub '{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
+      TemplateURL: !Sub 'https://${TemplateBucketName}.s3.amazonaws.com/templates/ec2.yaml'
+      Parameters:
+        StackName: !Ref AWS::StackName
         InstanceType: !Ref InstanceType
-        IamInstanceProfile:
-          Arn: !GetAtt IAMStack.Outputs.EC2InstanceProfileArn
-        SecurityGroupIds:
-          - !GetAtt SecurityGroupsStack.Outputs.EC2SecurityGroupId
-        BlockDeviceMappings:
-          - DeviceName: /dev/sda1
-            Ebs:
-              Encrypted: true
-              KmsKeyId: !GetAtt KMSStack.Outputs.KMSKeyId
-              VolumeSize: 20
-              VolumeType: gp3
-              DeleteOnTermination: true
-        UserData:
-          Fn::Base64: !Sub |
-            #!/bin/bash
-            set -e
-            
-            # Update system
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update -y
-            apt-get upgrade -y
-            
-            # Install SSM Agent (if not pre-installed)
-            if ! systemctl is-active --quiet amazon-ssm-agent; then
-              snap install amazon-ssm-agent --classic
-              systemctl enable amazon-ssm-agent
-              systemctl start amazon-ssm-agent
-            fi
-            
-            # Install CloudWatch Agent
-            wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
-            dpkg -i -E ./amazon-cloudwatch-agent.deb || true
-            apt-get install -f -y
-            
-            # Install Apache
-            apt-get install -y apache2
-            systemctl start apache2
-            systemctl enable apache2
-            
-            # Configure CloudWatch Agent for HIPAA audit logging
-            LOG_GROUP_NAME="/aws/ec2/${AWS::StackName}/application-logs"
-            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CFN_EOF'
-            {
-              "logs": {
-                "logs_collected": {
-                  "files": {
-                    "collect_list": [
-                      {
-                        "file_path": "/var/log/apache2/access.log",
-                        "log_group_name": "LOG_GROUP_PLACEHOLDER",
-                        "log_stream_name": "{instance_id}-apache-access",
-                        "retention_in_days": 90
-                      },
-                      {
-                        "file_path": "/var/log/apache2/error.log",
-                        "log_group_name": "LOG_GROUP_PLACEHOLDER",
-                        "log_stream_name": "{instance_id}-apache-error",
-                        "retention_in_days": 90
-                      },
-                      {
-                        "file_path": "/var/log/syslog",
-                        "log_group_name": "LOG_GROUP_PLACEHOLDER",
-                        "log_stream_name": "{instance_id}-syslog",
-                        "retention_in_days": 90
-                      },
-                      {
-                        "file_path": "/var/log/auth.log",
-                        "log_group_name": "LOG_GROUP_PLACEHOLDER",
-                        "log_stream_name": "{instance_id}-auth",
-                        "retention_in_days": 90
-                      }
-                    ]
-                  }
-                }
-              },
-              "metrics": {
-                "namespace": "BMC/HIPAA",
-                "metrics_collected": {
-                  "cpu": {
-                    "totalcpu": true,
-                    "measurement": [
-                      "cpu_usage_idle",
-                      "cpu_usage_iowait",
-                      "cpu_usage_user",
-                      "cpu_usage_system"
-                    ]
-                  },
-                  "disk": {
-                    "measurement": [
-                      "used_percent"
-                    ],
-                    "resources": [
-                      "*"
-                    ]
-                  },
-                  "mem": {
-                    "measurement": [
-                      "mem_used_percent"
-                    ]
-                  }
-                }
-              }
-            }
-            CFN_EOF
-            # Replace log group name placeholder
-            sed -i "s|LOG_GROUP_PLACEHOLDER|${LOG_GROUP_NAME}|g" /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-            
-            # Start CloudWatch Agent
-            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-              -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
-            
-            # Create basic index page (replace with BMC application deployment)
-            echo "<h1>BMC Application - HIPAA Compliant</h1><p>Instance: $(hostname)</p><p>OS: Ubuntu $(lsb_release -rs)</p><p>Deployed via CloudFormation</p>" > /var/www/html/index.html
-            
-            # Set proper permissions
-            chmod 644 /var/www/html/index.html
-            chown www-data:www-data /var/www/html/index.html
-            
-            # Enable audit logging
-            echo "BMC Application instance $(hostname) initialized at $(date)" >> /var/log/bmc-init.log
-        TagSpecifications:
-          - ResourceType: instance
-            Tags:
-              - Key: Name
-                Value: !Sub '${AWS::StackName}-ec2-instance'
-              - Key: ManagedBy
-                Value: CloudFormation
-              - Key: Compliance
-                Value: HIPAA
-              - Key: Application
-                Value: BMC
-              - Key: DataClassification
-                Value: PHI
-              - Key: OS
-                Value: Ubuntu
+        AMIId: !Ref AMIId
+        EC2InstanceProfileArn: !GetAtt IAMStack.Outputs.EC2InstanceProfileArn
+        EC2SecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.EC2SecurityGroupId
+        KMSKeyId: !If
+          - CreateKMSKey
+          - !GetAtt KMSStack.Outputs.KMSKeyId
+          - !Ref KMSKeyId
+        EC2ApplicationLogsGroupName: !GetAtt LoggingStack.Outputs.EC2ApplicationLogsGroupName
+      DependsOn:
+        - IAMStack
+        - SecurityGroupsStack
+        - LoggingStack
+        - KMSStack
+      TimeoutInMinutes: 5
 
-  # Auto Scaling Group
-  AutoScalingGroup:
-    Type: AWS::AutoScaling::AutoScalingGroup
+  # Auto Scaling Stack
+  AutoScalingStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: UseS3Templates
     Properties:
-      AutoScalingGroupName: !Sub '${AWS::StackName}-asg'
-      VPCZoneIdentifier:
-        - !Ref PrivateSubnet1Id
-        - !Ref PrivateSubnet2Id
-      LaunchTemplate:
-        LaunchTemplateId: !Ref EC2LaunchTemplate
-        Version: !GetAtt EC2LaunchTemplate.LatestVersionNumber
-      MinSize: !Ref MinSize
-      MaxSize: !Ref MaxSize
-      DesiredCapacity: !Ref DesiredCapacity
-      HealthCheckType: ELB
-      HealthCheckGracePeriod: 300
-      TargetGroupARNs:
-        - !Ref ALBTargetGroup
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-asg-instance'
-          PropagateAtLaunch: true
-        - Key: Compliance
-          Value: HIPAA
-          PropagateAtLaunch: true
-        - Key: Application
-          Value: BMC
-          PropagateAtLaunch: true
-
-  # Auto Scaling Group Scaling Policy (CPU-based)
-  ScalingPolicyUp:
-    Type: AWS::AutoScaling::ScalingPolicy
-    Properties:
-      AdjustmentType: ChangeInCapacity
-      AutoScalingGroupName: !Ref AutoScalingGroup
-      Cooldown: 300
-      ScalingAdjustment: 1
-      PolicyType: SimpleScaling
-
-  ScalingPolicyDown:
-    Type: AWS::AutoScaling::ScalingPolicy
-    Properties:
-      AdjustmentType: ChangeInCapacity
-      AutoScalingGroupName: !Ref AutoScalingGroup
-      Cooldown: 300
-      ScalingAdjustment: -1
-      PolicyType: SimpleScaling
-
-  # CloudWatch Alarm for scaling up
-  CPUAlarmHigh:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub '${AWS::StackName}-cpu-high'
-      AlarmDescription: Alarm when CPU exceeds 70% - HIPAA Compliant Monitoring
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 70
-      ComparisonOperator: GreaterThanThreshold
-      Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref AutoScalingGroup
-      AlarmActions:
-        - !Ref ScalingPolicyUp
-      Tags:
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
-
-  # CloudWatch Alarm for scaling down
-  CPUAlarmLow:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub '${AWS::StackName}-cpu-low'
-      AlarmDescription: Alarm when CPU falls below 30% - HIPAA Compliant Monitoring
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 30
-      ComparisonOperator: LessThanThreshold
-      Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref AutoScalingGroup
-      AlarmActions:
-        - !Ref ScalingPolicyDown
-      Tags:
-        - Key: Compliance
-          Value: HIPAA
-        - Key: Application
-          Value: BMC
+      TemplateURL: !Sub 'https://${TemplateBucketName}.s3.amazonaws.com/templates/autoscaling.yaml'
+      Parameters:
+        StackName: !Ref AWS::StackName
+        PrivateSubnet1Id: !Ref PrivateSubnet1Id
+        PrivateSubnet2Id: !Ref PrivateSubnet2Id
+        LaunchTemplateId: !GetAtt EC2Stack.Outputs.LaunchTemplateId
+        LaunchTemplateVersion: !GetAtt EC2Stack.Outputs.LaunchTemplateLatestVersion
+        TargetGroupARN: !GetAtt ALBStack.Outputs.TargetGroupARN
+        MinSize: !Ref MinSize
+        MaxSize: !Ref MaxSize
+        DesiredCapacity: !Ref DesiredCapacity
+      DependsOn:
+        - EC2Stack
+        - ALBStack
+      TimeoutInMinutes: 10
 
 Outputs:
   LoadBalancerDNS:
     Description: DNS name of the Application Load Balancer (HTTPS endpoint)
-    Value: !GetAtt ApplicationLoadBalancer.DNSName
-    Export:
-      Name: !Sub '${AWS::StackName}-alb-dns'
+    Value: !GetAtt ALBStack.Outputs.LoadBalancerDNS
+    Condition: UseS3Templates
   
   LoadBalancerARN:
     Description: ARN of the Application Load Balancer
-    Value: !GetAtt ApplicationLoadBalancer.LoadBalancerArn
-    Export:
-      Name: !Sub '${AWS::StackName}-alb-arn'
+    Value: !GetAtt ALBStack.Outputs.LoadBalancerARN
+    Condition: UseS3Templates
   
   TargetGroupARN:
     Description: ARN of the Target Group
-    Value: !Ref ALBTargetGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-tg-arn'
+    Value: !GetAtt ALBStack.Outputs.TargetGroupARN
+    Condition: UseS3Templates
   
   AutoScalingGroupName:
     Description: Name of the Auto Scaling Group
-    Value: !Ref AutoScalingGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-asg-name'
+    Value: !GetAtt AutoScalingStack.Outputs.AutoScalingGroupName
+    Condition: UseS3Templates
   
   EC2SecurityGroupId:
     Description: Security Group ID for EC2 instances
     Value: !GetAtt SecurityGroupsStack.Outputs.EC2SecurityGroupId
-    Export:
-      Name: !Sub '${AWS::StackName}-ec2-sg-id'
+    Condition: UseS3Templates
   
   ALBSecurityGroupId:
     Description: Security Group ID for ALB
     Value: !GetAtt SecurityGroupsStack.Outputs.ALBSecurityGroupId
-    Export:
-      Name: !Sub '${AWS::StackName}-alb-sg-id'
+    Condition: UseS3Templates
   
   KMSKeyId:
     Description: KMS Key ID used for encryption
-    Value: !GetAtt KMSStack.Outputs.KMSKeyId
-    Export:
-      Name: !Sub '${AWS::StackName}-kms-key-id'
+    Value: !If
+      - CreateKMSKey
+      - !GetAtt KMSStack.Outputs.KMSKeyId
+      - !Ref KMSKeyId
+    Condition: UseS3Templates
   
   CloudWatchLogGroups:
     Description: CloudWatch Log Groups for HIPAA audit logging
     Value: !Sub '${LoggingStack.Outputs.EC2ApplicationLogsGroupName}, ${LoggingStack.Outputs.ALBAccessLogsGroupName}'
+    Condition: UseS3Templates
   
   HIPAAComplianceNote:
     Description: HIPAA Compliance Features Enabled
