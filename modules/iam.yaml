@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Roles and Policies Module for HIPAA-Compliant Infrastructure'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Stack name for resource naming
+  
+  EC2ApplicationLogsGroupArn:
+    Type: String
+    Description: ARN of the EC2 Application Logs CloudWatch Log Group
+  
+  KMSKeyArn:
+    Type: String
+    Description: ARN of the KMS Key for encryption
+
+Resources:
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${StackName}-ec2-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !Ref EC2ApplicationLogsGroupArn
+                  - !Sub '${EC2ApplicationLogsGroupArn}:*'
+        - PolicyName: KMSDecryptPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !Ref KMSKeyArn
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-ec2-role'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${StackName}-ec2-profile'
+      Roles:
+        - !Ref EC2InstanceRole
+
+Outputs:
+  EC2InstanceProfileArn:
+    Description: ARN of the EC2 Instance Profile
+    Value: !GetAtt EC2InstanceProfile.Arn
+    Export:
+      Name: !Sub '${StackName}-ec2-profile-arn'

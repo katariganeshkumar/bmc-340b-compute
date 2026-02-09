@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'KMS Key Module for HIPAA-Compliant Encryption'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Stack name for resource naming
+  
+  KMSKeyId:
+    Type: String
+    Default: ''
+    Description: Existing KMS Key ID (optional, creates new key if not provided)
+
+Conditions:
+  CreateKMSKey: !Equals [!Ref KMSKeyId, '']
+
+Resources:
+  KMSKey:
+    Type: AWS::KMS::Key
+    Condition: CreateKMSKey
+    Properties:
+      Description: KMS key for HIPAA-compliant encryption
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow CloudWatch Logs
+            Effect: Allow
+            Principal:
+              Service: logs.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+            Condition:
+              ArnEquals:
+                kms:EncryptionContext:aws:logs:arn: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-kms-key'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  KMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Condition: CreateKMSKey
+    Properties:
+      AliasName: !Sub 'alias/${StackName}-hipaa-key'
+      TargetKeyId: !Ref KMSKey
+
+Outputs:
+  KMSKeyId:
+    Description: KMS Key ID used for encryption
+    Value: !If
+      - CreateKMSKey
+      - !Ref KMSKey
+      - !Ref KMSKeyId
+    Export:
+      Name: !Sub '${StackName}-kms-key-id'
+  
+  KMSKeyArn:
+    Description: KMS Key ARN
+    Value: !If
+      - CreateKMSKey
+      - !GetAtt KMSKey.Arn
+      - !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KMSKeyId}'
+    Export:
+      Name: !Sub '${StackName}-kms-key-arn'

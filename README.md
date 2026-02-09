@@ -4,6 +4,35 @@
 
 This CloudFormation template creates a HIPAA-compliant EC2 Auto Scaling Group with an Application Load Balancer (ALB) in private subnets with SSM Session Manager access, specifically configured for BMC applications handling Protected Health Information (PHI). **All EC2 instances use Ubuntu 22.04 LTS OS and t3.nano instance type.**
 
+## Project Structure
+
+```
+compute/
+├── main.yaml                    # Main CloudFormation template
+├── parameters.json              # Default parameters file
+├── modules/                     # Reusable CloudFormation modules
+│   ├── kms.yaml                # KMS encryption module
+│   ├── security-groups.yaml    # Security groups module
+│   ├── iam.yaml                # IAM roles and policies module
+│   ├── logging.yaml            # CloudWatch Logs and VPC Flow Logs module
+│   └── README.md               # Modules documentation
+├── environments/                # Environment-specific parameter files
+│   ├── dev.json                # Development environment
+│   ├── staging.json            # Staging environment
+│   ├── prod.json               # Production environment
+│   └── README.md               # Environments documentation
+├── templates/                  # Additional templates (if needed)
+│   └── README.md
+└── README.md                   # This file
+```
+
+### Key Files
+
+- **`main.yaml`**: Complete CloudFormation template with all resources
+- **`parameters.json`**: Default parameter values (update with your VPC/subnet IDs)
+- **`modules/`**: Reusable components that can be used as nested stacks
+- **`environments/`**: Environment-specific parameter files for dev/staging/prod
+
 ## HIPAA Compliance Features
 
 ✅ **Encryption at Rest**: EBS volumes encrypted with KMS  
@@ -84,7 +113,27 @@ aws acm list-certificates --region us-east-1
 
 ### 2. Update Parameters File
 
-Edit `parameters.json` with your actual values:
+Choose the appropriate environment file or edit `parameters.json` with your actual values:
+
+**For Development:**
+```bash
+# Edit environments/dev.json
+```
+
+**For Staging:**
+```bash
+# Edit environments/staging.json
+```
+
+**For Production:**
+```bash
+# Edit environments/prod.json
+```
+
+**Or use default:**
+```bash
+# Edit parameters.json
+```
 
 ```json
 {
@@ -105,13 +154,41 @@ Edit `parameters.json` with your actual values:
 
 ### 3. Deploy Stack
 
+**Using default parameters:**
 ```bash
 aws cloudformation create-stack \
   --stack-name bmc-hipaa-autoscaling-alb \
-  --template-body file://ec2-autoscaling-alb.yaml \
+  --template-body file://main.yaml \
   --parameters file://parameters.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC
+```
+
+**Using environment-specific parameters:**
+```bash
+# Development
+aws cloudformation create-stack \
+  --stack-name bmc-hipaa-dev \
+  --template-body file://main.yaml \
+  --parameters file://environments/dev.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC Key=Environment,Value=dev
+
+# Staging
+aws cloudformation create-stack \
+  --stack-name bmc-hipaa-staging \
+  --template-body file://main.yaml \
+  --parameters file://environments/staging.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC Key=Environment,Value=staging
+
+# Production
+aws cloudformation create-stack \
+  --stack-name bmc-hipaa-prod \
+  --template-body file://main.yaml \
+  --parameters file://environments/prod.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC Key=Environment,Value=prod
 ```
 
 ### 4. Update Stack (if needed)
@@ -119,7 +196,7 @@ aws cloudformation create-stack \
 ```bash
 aws cloudformation update-stack \
   --stack-name bmc-hipaa-autoscaling-alb \
-  --template-body file://ec2-autoscaling-alb.yaml \
+  --template-body file://main.yaml \
   --parameters file://parameters.json \
   --capabilities CAPABILITY_NAMED_IAM
 ```

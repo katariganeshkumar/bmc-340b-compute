@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Security Groups Module for HIPAA-Compliant Infrastructure'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Stack name for resource naming
+  
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where security groups will be created
+  
+  AllowedCIDR:
+    Type: String
+    Description: CIDR block allowed to access the ALB
+
+Resources:
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${StackName}-alb-sg'
+      GroupDescription: Security group for Application Load Balancer (HIPAA Compliant)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedCIDR
+          Description: HTTP redirect to HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref AllowedCIDR
+          Description: HTTPS traffic (encrypted)
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-alb-sg'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${StackName}-ec2-sg'
+      GroupDescription: Security group for EC2 instances (HIPAA Compliant)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow HTTP traffic from ALB only
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow HTTPS traffic from ALB only
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-ec2-sg'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+Outputs:
+  ALBSecurityGroupId:
+    Description: Security Group ID for ALB
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${StackName}-alb-sg-id'
+  
+  EC2SecurityGroupId:
+    Description: Security Group ID for EC2 instances
+    Value: !Ref EC2SecurityGroup
+    Export:
+      Name: !Sub '${StackName}-ec2-sg-id'

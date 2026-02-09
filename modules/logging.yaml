@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudWatch Logging and VPC Flow Logs Module for HIPAA Compliance'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Stack name for resource naming
+  
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for VPC Flow Logs
+  
+  KMSKeyId:
+    Type: String
+    Description: KMS Key ID for log encryption (optional)
+    Default: ''
+  
+  EnableVPCFlowLogs:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Enable VPC Flow Logs
+
+Conditions:
+  CreateKMSKey: !Equals [!Ref KMSKeyId, '']
+  HasKMSKeyId: !Not [!Equals [!Ref KMSKeyId, '']]
+  EnableFlowLogs: !Equals [!Ref EnableVPCFlowLogs, 'true']
+
+Resources:
+  ALBAccessLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/alb/${StackName}/access-logs'
+      RetentionInDays: 90
+      KmsKeyId: !If
+        - CreateKMSKey
+        - !Ref AWS::NoValue
+        - !If
+          - HasKMSKeyId
+          - !Ref KMSKeyId
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-alb-access-logs'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  EC2ApplicationLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${StackName}/application-logs'
+      RetentionInDays: 90
+      KmsKeyId: !If
+        - CreateKMSKey
+        - !Ref AWS::NoValue
+        - !If
+          - HasKMSKeyId
+          - !Ref KMSKeyId
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-ec2-application-logs'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  VPCFlowLogsRole:
+    Type: AWS::IAM::Role
+    Condition: EnableFlowLogs
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VPCFlowLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: '*'
+
+  VPCFlowLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableFlowLogs
+    Properties:
+      LogGroupName: !Sub '/aws/vpc/${StackName}/flow-logs'
+      RetentionInDays: 90
+      KmsKeyId: !If
+        - CreateKMSKey
+        - !Ref AWS::NoValue
+        - !If
+          - HasKMSKeyId
+          - !Ref KMSKeyId
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-vpc-flow-logs'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  VPCFlowLogs:
+    Type: AWS::EC2::FlowLog
+    Condition: EnableFlowLogs
+    Properties:
+      ResourceType: VPC
+      ResourceId: !Ref VpcId
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref VPCFlowLogsGroup
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogsRole.Arn
+
+Outputs:
+  ALBAccessLogsGroupName:
+    Description: CloudWatch Log Group name for ALB access logs
+    Value: !Ref ALBAccessLogsGroup
+    Export:
+      Name: !Sub '${StackName}-alb-access-logs-group'
+  
+  EC2ApplicationLogsGroupArn:
+    Description: ARN of the EC2 Application Logs CloudWatch Log Group
+    Value: !GetAtt EC2ApplicationLogsGroup.Arn
+    Export:
+      Name: !Sub '${StackName}-ec2-application-logs-group-arn'
+  
+  EC2ApplicationLogsGroupName:
+    Description: CloudWatch Log Group name for EC2 application logs
+    Value: !Ref EC2ApplicationLogsGroup
+    Export:
+      Name: !Sub '${StackName}-ec2-application-logs-group'

@@ -1,0 +1,50 @@
+[
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-prod-xxxxxxxxx"
+  },
+  {
+    "ParameterKey": "PrivateSubnet1Id",
+    "ParameterValue": "subnet-prod-private1-xxxxx"
+  },
+  {
+    "ParameterKey": "PrivateSubnet2Id",
+    "ParameterValue": "subnet-prod-private2-xxxxx"
+  },
+  {
+    "ParameterKey": "PublicSubnet1Id",
+    "ParameterValue": "subnet-prod-public1-xxxxx"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t3.small"
+  },
+  {
+    "ParameterKey": "MinSize",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "MaxSize",
+    "ParameterValue": "5"
+  },
+  {
+    "ParameterKey": "DesiredCapacity",
+    "ParameterValue": "3"
+  },
+  {
+    "ParameterKey": "SSLCertificateARN",
+    "ParameterValue": "arn:aws:acm:region:account-id:certificate/certificate-id"
+  },
+  {
+    "ParameterKey": "AllowedCIDR",
+    "ParameterValue": "10.0.0.0/8"
+  },
+  {
+    "ParameterKey": "KMSKeyId",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "EnableVPCFlowLogs",
+    "ParameterValue": "true"
+  }
+]
