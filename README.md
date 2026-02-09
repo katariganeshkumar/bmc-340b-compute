@@ -10,19 +10,17 @@ This CloudFormation template creates a HIPAA-compliant EC2 Auto Scaling Group wi
 compute/
 ├── main.yaml                    # Main CloudFormation template
 ├── parameters.json              # Default parameters file
-├── modules/                     # Reusable CloudFormation modules
-│   ├── kms.yaml                # KMS encryption module
-│   ├── security-groups.yaml    # Security groups module
-│   ├── iam.yaml                # IAM roles and policies module
-│   ├── logging.yaml            # CloudWatch Logs and VPC Flow Logs module
-│   └── README.md               # Modules documentation
+├── templates/                   # Reusable CloudFormation templates
+│   ├── kms.yaml                # KMS encryption template
+│   ├── security-groups.yaml    # Security groups template
+│   ├── iam.yaml                # IAM roles and policies template
+│   ├── logging.yaml            # CloudWatch Logs and VPC Flow Logs template
+│   └── README.md               # Templates documentation
 ├── environments/                # Environment-specific parameter files
 │   ├── dev.json                # Development environment
 │   ├── staging.json            # Staging environment
 │   ├── prod.json               # Production environment
 │   └── README.md               # Environments documentation
-├── templates/                  # Additional templates (if needed)
-│   └── README.md
 └── README.md                   # This file
 ```
 
@@ -30,7 +28,7 @@ compute/
 
 - **`main.yaml`**: Complete CloudFormation template with all resources
 - **`parameters.json`**: Default parameter values (update with your VPC/subnet IDs)
-- **`modules/`**: Reusable components that can be used as nested stacks
+- **`templates/`**: Reusable components that can be used as nested stacks
 - **`environments/`**: Environment-specific parameter files for dev/staging/prod
 
 ## HIPAA Compliance Features
