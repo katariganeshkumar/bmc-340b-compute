@@ -1,5 +1,7 @@
 # HIPAA-Compliant EC2 Auto Scaling with Application Load Balancer for BMC Application
 
+**Repository**: [https://github.com/katariganeshkumar/bmc-340b-compute](https://github.com/katariganeshkumar/bmc-340b-compute)
+
 This CloudFormation template creates a HIPAA-compliant EC2 Auto Scaling Group with an Application Load Balancer (ALB) in private subnets with SSM Session Manager access, specifically configured for BMC applications handling Protected Health Information (PHI). **All EC2 instances use Ubuntu 22.04 LTS OS and t3.nano instance type.**
 
 ## HIPAA Compliance Features
