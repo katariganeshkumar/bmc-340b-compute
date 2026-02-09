@@ -26,10 +26,32 @@ compute/
 
 ### Key Files
 
-- **`main.yaml`**: Complete CloudFormation template with all resources
-- **`parameters.json`**: Default parameter values (update with your VPC/subnet IDs)
-- **`templates/`**: Reusable components that can be used as nested stacks
+- **`main.yaml`**: Main CloudFormation template that orchestrates nested stacks from `templates/`
+- **`parameters.json`**: Default parameter values (update with your VPC/subnet IDs and S3 bucket)
+- **`templates/`**: Reusable CloudFormation templates deployed as nested stacks:
+  - `kms.yaml` - KMS encryption
+  - `logging.yaml` - CloudWatch Logs and VPC Flow Logs
+  - `security-groups.yaml` - Security groups
+  - `iam.yaml` - IAM roles and policies
 - **`environments/`**: Environment-specific parameter files for dev/staging/prod
+- **`deploy.sh`**: Deployment script that uploads templates and deploys the stack
+- **`DEPLOYMENT.md`**: Detailed deployment guide
+
+## Architecture: Nested Stacks
+
+The `main.yaml` template uses **nested CloudFormation stacks** to deploy modular components:
+
+1. **KMSStack** → Creates KMS key for encryption
+2. **LoggingStack** → Creates CloudWatch Log Groups and VPC Flow Logs (depends on KMSStack)
+3. **SecurityGroupsStack** → Creates security groups for ALB and EC2
+4. **IAMStack** → Creates IAM roles and policies (depends on LoggingStack and KMSStack)
+5. **Main Stack** → Creates ALB, EC2 Launch Template, Auto Scaling Group, and CloudWatch Alarms
+
+**Benefits:**
+- ✅ Modular and maintainable
+- ✅ Templates can be reused
+- ✅ Independent updates
+- ✅ Better error isolation
 
 ## HIPAA Compliance Features
 
@@ -94,9 +116,40 @@ compute/
 - **KMSKeyId**: Existing KMS Key ID for encryption (optional, creates new key if not provided)
 - **EnableVPCFlowLogs**: Enable VPC Flow Logs (default: true, recommended for HIPAA)
 
+## Quick Start
+
+**Prerequisites:**
+1. S3 bucket for storing nested stack templates
+2. SSL certificate in ACM
+3. VPC with subnets configured
+
+**Deploy using the script:**
+```bash
+./deploy.sh <stack-name> <environment> <s3-bucket-name>
+# Example: ./deploy.sh bmc-hipaa-prod prod my-cf-templates-bucket
+```
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for detailed deployment instructions.
+
 ## Deployment
 
-### 1. Create SSL Certificate in ACM
+### 1. Create S3 Bucket for Templates
+
+```bash
+# Create S3 bucket for nested stack templates
+aws s3 mb s3://your-cf-templates-bucket --region us-east-1
+```
+
+### 2. Upload Templates to S3
+
+```bash
+aws s3 cp templates/kms.yaml s3://your-cf-templates-bucket/templates/kms.yaml
+aws s3 cp templates/logging.yaml s3://your-cf-templates-bucket/templates/logging.yaml
+aws s3 cp templates/security-groups.yaml s3://your-cf-templates-bucket/templates/security-groups.yaml
+aws s3 cp templates/iam.yaml s3://your-cf-templates-bucket/templates/iam.yaml
+```
+
+### 3. Create SSL Certificate in ACM
 
 ```bash
 # Request a certificate (if you don't have one)
@@ -109,9 +162,17 @@ aws acm request-certificate \
 aws acm list-certificates --region us-east-1
 ```
 
-### 2. Update Parameters File
+### 4. Update Parameters File
 
 Choose the appropriate environment file or edit `parameters.json` with your actual values:
+
+**Important:** Add the `TemplateBucket` parameter with your S3 bucket name:
+```json
+{
+  "ParameterKey": "TemplateBucket",
+  "ParameterValue": "your-cf-templates-bucket"
+}
+```
 
 **For Development:**
 ```bash
@@ -150,7 +211,7 @@ Choose the appropriate environment file or edit `parameters.json` with your actu
 
 **IMPORTANT**: For HIPAA compliance, restrict `AllowedCIDR` to your organization's IP range, not `0.0.0.0/0`.
 
-### 3. Deploy Stack
+### 5. Deploy Stack
 
 **Using default parameters:**
 ```bash
@@ -189,7 +250,7 @@ aws cloudformation create-stack \
   --tags Key=Compliance,Value=HIPAA Key=Application,Value=BMC Key=Environment,Value=prod
 ```
 
-### 4. Update Stack (if needed)
+### 6. Update Stack (if needed)
 
 ```bash
 aws cloudformation update-stack \
@@ -199,7 +260,7 @@ aws cloudformation update-stack \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-### 5. Delete Stack
+### 7. Delete Stack
 
 **Note**: ALB has deletion protection enabled. Disable it first:
 

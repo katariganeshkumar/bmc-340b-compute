@@ -46,5 +46,9 @@
   {
     "ParameterKey": "EnableVPCFlowLogs",
     "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "TemplateBucket",
+    "ParameterValue": "your-s3-bucket-name"
   }
 ]
