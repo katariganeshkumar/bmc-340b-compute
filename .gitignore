@@ -1,0 +1,56 @@
+# AWS credentials and sensitive files
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.p7b
+*.p7c
+*.p7m
+*.p7s
+*.p8
+*.p10
+*.spc
+*.crl
+*.csr
+*.jks
+*.keystore
+*.truststore
+
+# CloudFormation outputs
+*-output.json
+*-output.yaml
+*-output.yml
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# OS files
+Thumbs.db
+.DS_Store

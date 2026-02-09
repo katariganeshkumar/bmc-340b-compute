@@ -1,0 +1,728 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'HIPAA-Compliant EC2 Auto Scaling Group with Application Load Balancer for BMC Application - Private Subnets with SSM Session Manager access (Ubuntu OS)'
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where resources will be deployed
+  
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: First private subnet ID for EC2 instances
+  
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second private subnet ID for EC2 instances
+  
+  PublicSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet ID for ALB (single public subnet in Workload OU)
+  
+  InstanceType:
+    Type: String
+    Default: t3.nano
+    AllowedValues:
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+    Description: EC2 instance type
+  
+  MinSize:
+    Type: Number
+    Default: 1
+    Description: Minimum number of instances in the Auto Scaling Group
+  
+  MaxSize:
+    Type: Number
+    Default: 3
+    Description: Maximum number of instances in the Auto Scaling Group
+  
+  DesiredCapacity:
+    Type: Number
+    Default: 2
+    Description: Desired number of instances in the Auto Scaling Group
+  
+  AMIId:
+    Type: String
+    Description: AMI ID for EC2 instances (Ubuntu 22.04 LTS or later recommended for SSM)
+    Default: ''
+  
+  SSLCertificateARN:
+    Type: String
+    Description: ARN of the SSL certificate in ACM for HTTPS listener (required for HIPAA compliance)
+  
+  AllowedCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR block allowed to access the ALB (restrict for HIPAA compliance)
+  
+  KMSKeyId:
+    Type: String
+    Default: ''
+    Description: KMS Key ID for encryption (optional, uses default AWS managed key if not provided)
+  
+  EnableVPCFlowLogs:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Enable VPC Flow Logs for network traffic auditing (required for HIPAA)
+
+Resources:
+  # KMS Key for encryption (if not provided)
+  KMSKey:
+    Type: AWS::KMS::Key
+    Condition: CreateKMSKey
+    Properties:
+      Description: KMS key for HIPAA-compliant encryption
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow CloudWatch Logs
+            Effect: Allow
+            Principal:
+              Service: logs.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+            Condition:
+              ArnEquals:
+                kms:EncryptionContext:aws:logs:arn: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-kms-key'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  KMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Condition: CreateKMSKey
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-hipaa-key'
+      TargetKeyId: !Ref KMSKey
+
+  # CloudWatch Log Group for ALB Access Logs
+  ALBAccessLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/alb/${AWS::StackName}/access-logs'
+      RetentionInDays: 90
+      KmsKeyId: !If
+        - CreateKMSKey
+        - !Ref KMSKey
+        - !If
+          - HasKMSKeyId
+          - !Ref KMSKeyId
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-alb-access-logs'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # CloudWatch Log Group for EC2 Application Logs
+  EC2ApplicationLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${AWS::StackName}/application-logs'
+      RetentionInDays: 90
+      KmsKeyId: !If
+        - CreateKMSKey
+        - !Ref KMSKey
+        - !If
+          - HasKMSKeyId
+          - !Ref KMSKeyId
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2-application-logs'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # VPC Flow Logs IAM Role
+  VPCFlowLogsRole:
+    Type: AWS::IAM::Role
+    Condition: EnableFlowLogs
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VPCFlowLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: '*'
+
+  # CloudWatch Log Group for VPC Flow Logs
+  VPCFlowLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableFlowLogs
+    Properties:
+      LogGroupName: !Sub '/aws/vpc/${AWS::StackName}/flow-logs'
+      RetentionInDays: 90
+      KmsKeyId: !If
+        - CreateKMSKey
+        - !Ref KMSKey
+        - !If
+          - HasKMSKeyId
+          - !Ref KMSKeyId
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc-flow-logs'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # VPC Flow Logs
+  VPCFlowLogs:
+    Type: AWS::EC2::FlowLog
+    Condition: EnableFlowLogs
+    Properties:
+      ResourceType: VPC
+      ResourceId: !Ref VpcId
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref VPCFlowLogsGroup
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogsRole.Arn
+
+  # Security Group for ALB
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-alb-sg'
+      GroupDescription: Security group for Application Load Balancer (HIPAA Compliant)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedCIDR
+          Description: HTTP redirect to HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref AllowedCIDR
+          Description: HTTPS traffic (encrypted)
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-alb-sg'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # Security Group for EC2 instances
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-ec2-sg'
+      GroupDescription: Security group for EC2 instances (HIPAA Compliant)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow HTTP traffic from ALB only
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow HTTPS traffic from ALB only
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2-sg'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # IAM Role for EC2 instances with SSM access and CloudWatch Logs
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-ec2-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !GetAtt EC2ApplicationLogsGroup.Arn
+                  - !Sub '${EC2ApplicationLogsGroup.Arn}:*'
+        - PolicyName: KMSDecryptPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !If
+                  - CreateKMSKey
+                  - !GetAtt KMSKey.Arn
+                  - !If
+                    - HasKMSKeyId
+                    - !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KMSKeyId}'
+                    - '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2-role'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # Instance Profile for EC2 instances
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${AWS::StackName}-ec2-profile'
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${AWS::StackName}-alb'
+      Type: application
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnet1Id
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+        - Key: routing.http.x_amzn_tls_version_and_cipher_suite.enabled
+          Value: 'true'
+        - Key: routing.http.xff_client_port.enabled
+          Value: 'true'
+        - Key: deletion_protection.enabled
+          Value: 'true'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-alb'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # Target Group for ALB
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-tg'
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetType: instance
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: stickiness.enabled
+          Value: 'false'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-tg'
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # ALB HTTPS Listener (Primary)
+  ALBHTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref SSLCertificateARN
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+
+  # ALB HTTP Listener (Redirects to HTTPS)
+  ALBHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: 443
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  # Launch Template for EC2 instances
+  EC2LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${AWS::StackName}-launch-template'
+      LaunchTemplateData:
+        ImageId: !If
+          - HasCustomAMI
+          - !Ref AMIId
+          - !Sub '{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref EC2SecurityGroup
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              Encrypted: true
+              KmsKeyId: !If
+                - CreateKMSKey
+                - !Ref KMSKey
+                - !If
+                  - HasKMSKeyId
+                  - !Ref KMSKeyId
+                  - !Ref AWS::NoValue
+              VolumeSize: 20
+              VolumeType: gp3
+              DeleteOnTermination: true
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
+            
+            # Update system
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -y
+            apt-get upgrade -y
+            
+            # Install SSM Agent (if not pre-installed)
+            if ! systemctl is-active --quiet amazon-ssm-agent; then
+              snap install amazon-ssm-agent --classic
+              systemctl enable amazon-ssm-agent
+              systemctl start amazon-ssm-agent
+            fi
+            
+            # Install CloudWatch Agent
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+            dpkg -i -E ./amazon-cloudwatch-agent.deb || true
+            apt-get install -f -y
+            
+            # Install Apache
+            apt-get install -y apache2
+            systemctl start apache2
+            systemctl enable apache2
+            
+            # Configure CloudWatch Agent for HIPAA audit logging
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
+            {
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                      {
+                        "file_path": "/var/log/apache2/access.log",
+                        "log_group_name": "${EC2ApplicationLogsGroup}",
+                        "log_stream_name": "{instance_id}-apache-access",
+                        "retention_in_days": 90
+                      },
+                      {
+                        "file_path": "/var/log/apache2/error.log",
+                        "log_group_name": "${EC2ApplicationLogsGroup}",
+                        "log_stream_name": "{instance_id}-apache-error",
+                        "retention_in_days": 90
+                      },
+                      {
+                        "file_path": "/var/log/syslog",
+                        "log_group_name": "${EC2ApplicationLogsGroup}",
+                        "log_stream_name": "{instance_id}-syslog",
+                        "retention_in_days": 90
+                      },
+                      {
+                        "file_path": "/var/log/auth.log",
+                        "log_group_name": "${EC2ApplicationLogsGroup}",
+                        "log_stream_name": "{instance_id}-auth",
+                        "retention_in_days": 90
+                      }
+                    ]
+                  }
+                }
+              },
+              "metrics": {
+                "namespace": "BMC/HIPAA",
+                "metrics_collected": {
+                  "cpu": {
+                    "totalcpu": true,
+                    "measurement": [
+                      "cpu_usage_idle",
+                      "cpu_usage_iowait",
+                      "cpu_usage_user",
+                      "cpu_usage_system"
+                    ]
+                  },
+                  "disk": {
+                    "measurement": [
+                      "used_percent"
+                    ],
+                    "resources": [
+                      "*"
+                    ]
+                  },
+                  "mem": {
+                    "measurement": [
+                      "mem_used_percent"
+                    ]
+                  }
+                }
+              }
+            }
+            EOF
+            
+            # Start CloudWatch Agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+            
+            # Create basic index page (replace with BMC application deployment)
+            echo "<h1>BMC Application - HIPAA Compliant</h1><p>Instance: $(hostname)</p><p>OS: Ubuntu $(lsb_release -rs)</p><p>Deployed via CloudFormation</p>" > /var/www/html/index.html
+            
+            # Set proper permissions
+            chmod 644 /var/www/html/index.html
+            chown www-data:www-data /var/www/html/index.html
+            
+            # Enable audit logging
+            echo "BMC Application instance $(hostname) initialized at $(date)" >> /var/log/bmc-init.log
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${AWS::StackName}-ec2-instance'
+              - Key: ManagedBy
+                Value: CloudFormation
+              - Key: Compliance
+                Value: HIPAA
+              - Key: Application
+                Value: BMC
+              - Key: DataClassification
+                Value: PHI
+              - Key: OS
+                Value: Ubuntu
+
+  # Auto Scaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${AWS::StackName}-asg'
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EC2LaunchTemplate
+        Version: !GetAtt EC2LaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-asg-instance'
+          PropagateAtLaunch: true
+        - Key: Compliance
+          Value: HIPAA
+          PropagateAtLaunch: true
+        - Key: Application
+          Value: BMC
+          PropagateAtLaunch: true
+
+  # Auto Scaling Group Scaling Policy (CPU-based)
+  ScalingPolicyUp:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 300
+      ScalingAdjustment: 1
+      PolicyType: SimpleScaling
+
+  ScalingPolicyDown:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 300
+      ScalingAdjustment: -1
+      PolicyType: SimpleScaling
+
+  # CloudWatch Alarm for scaling up
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-cpu-high'
+      AlarmDescription: Alarm when CPU exceeds 70% - HIPAA Compliant Monitoring
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref ScalingPolicyUp
+      Tags:
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+  # CloudWatch Alarm for scaling down
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-cpu-low'
+      AlarmDescription: Alarm when CPU falls below 30% - HIPAA Compliant Monitoring
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 30
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref ScalingPolicyDown
+      Tags:
+        - Key: Compliance
+          Value: HIPAA
+        - Key: Application
+          Value: BMC
+
+Conditions:
+  HasCustomAMI: !Not [!Equals [!Ref AMIId, '']]
+  CreateKMSKey: !Equals [!Ref KMSKeyId, '']
+  HasKMSKeyId: !Not [!Equals [!Ref KMSKeyId, '']]
+  EnableFlowLogs: !Equals [!Ref EnableVPCFlowLogs, 'true']
+
+Outputs:
+  LoadBalancerDNS:
+    Description: DNS name of the Application Load Balancer (HTTPS endpoint)
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-alb-dns'
+  
+  LoadBalancerARN:
+    Description: ARN of the Application Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.LoadBalancerArn
+    Export:
+      Name: !Sub '${AWS::StackName}-alb-arn'
+  
+  TargetGroupARN:
+    Description: ARN of the Target Group
+    Value: !Ref ALBTargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-tg-arn'
+  
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling Group
+    Value: !Ref AutoScalingGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-asg-name'
+  
+  EC2SecurityGroupId:
+    Description: Security Group ID for EC2 instances
+    Value: !Ref EC2SecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ec2-sg-id'
+  
+  ALBSecurityGroupId:
+    Description: Security Group ID for ALB
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-alb-sg-id'
+  
+  KMSKeyId:
+    Description: KMS Key ID used for encryption
+    Value: !If
+      - CreateKMSKey
+      - !Ref KMSKey
+      - !Ref KMSKeyId
+    Condition: CreateKMSKey
+  
+  CloudWatchLogGroups:
+    Description: CloudWatch Log Groups for HIPAA audit logging
+    Value: !Sub '${EC2ApplicationLogsGroup}, ${ALBAccessLogsGroup}'
+  
+  HIPAAComplianceNote:
+    Description: HIPAA Compliance Features Enabled
+    Value: 'Encryption at rest (EBS), Encryption in transit (HTTPS/TLS), CloudWatch Logs, VPC Flow Logs, SSM Session Manager, Restricted Security Groups, Ubuntu OS'
