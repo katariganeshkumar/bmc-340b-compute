@@ -13,14 +13,15 @@ NC='\033[0m' # No Color
 # Configuration
 ENVIRONMENT=${1:-dev}
 TEMPLATE_BUCKET=${2:-""}
+REGION=${3:-us-west-2}
 STACK_NAME="bmc-hipaa-${ENVIRONMENT}"
-REGION=${AWS_REGION:-us-east-1}
 
 # Check if bucket is provided
 if [ -z "$TEMPLATE_BUCKET" ]; then
     echo -e "${RED}Error: S3 bucket name is required${NC}"
-    echo "Usage: $0 <environment> <s3-bucket-name>"
-    echo "Example: $0 dev my-cf-templates-bucket"
+    echo "Usage: $0 <environment> <s3-bucket-name> [region]"
+    echo "Example: $0 dev my-cf-templates-bucket us-west-2"
+    echo "Default region: us-west-2"
     exit 1
 fi
 

@@ -110,14 +110,14 @@ compute/
 ### 1. Create SSL Certificate in ACM
 
 ```bash
-# Request a certificate (if you don't have one)
+# Request a certificate in us-west-2 (if you don't have one)
 aws acm request-certificate \
   --domain-name your-bmc-domain.com \
   --validation-method DNS \
-  --region us-east-1
+  --region us-west-2
 
 # List certificates to get ARN
-aws acm list-certificates --region us-east-1
+aws acm list-certificates --region us-west-2
 ```
 
 ### 2. Create S3 Bucket for Templates
@@ -125,22 +125,56 @@ aws acm list-certificates --region us-east-1
 Nested stacks require templates to be stored in S3:
 
 ```bash
-# Create S3 bucket (replace with your bucket name)
-aws s3 mb s3://your-cf-templates-bucket --region us-east-1
+# Create S3 bucket in us-west-2 (replace with your bucket name)
+aws s3 mb s3://your-cf-templates-bucket --region us-west-2
 
 # Enable versioning (recommended)
 aws s3api put-bucket-versioning \
   --bucket your-cf-templates-bucket \
-  --versioning-configuration Status=Enabled
+  --versioning-configuration Status=Enabled \
+  --region us-west-2
 ```
 
-### 3. Update Environment Parameters
+### 3. Get Subnet IDs
+
+If you need to find your subnet IDs:
+
+```bash
+# List subnets in your VPC (us-west-2)
+aws ec2 describe-subnets \
+  --filters "Name=vpc-id,Values=vpc-0ac6a3c566740c4bb" \
+  --region us-west-2 \
+  --query 'Subnets[*].[SubnetId,Tags[?Key==`Name`].Value|[0],AvailabilityZone,CidrBlock]' \
+  --output table
+
+# Update environments/dev.json with the actual subnet IDs
+```
+
+### 3. Get Subnet IDs
+
+If you need to find your subnet IDs:
+
+```bash
+# Use the helper script
+./get-subnets.sh vpc-0ac6a3c566740c4bb us-west-2
+
+# Or manually query
+aws ec2 describe-subnets \
+  --filters "Name=vpc-id,Values=vpc-0ac6a3c566740c4bb" \
+  --region us-west-2 \
+  --query 'Subnets[*].[SubnetId,Tags[?Key==`Name`].Value|[0],AvailabilityZone,CidrBlock]' \
+  --output table
+```
+
+### 4. Update Environment Parameters
 
 Edit the appropriate environment file with your actual values:
 
-**For Development:**
+**For Development (us-west-2):**
 ```bash
 # Edit environments/dev.json
+# VPC ID is already set: vpc-0ac6a3c566740c4bb
+# Update subnet IDs and SSL certificate ARN
 ```
 
 **For Staging:**
@@ -188,32 +222,36 @@ Edit the appropriate environment file with your actual values:
 **Option 2: Manual Deployment**
 
 ```bash
-# 1. Upload templates to S3
+# 1. Upload templates to S3 (us-west-2)
 aws s3 sync templates/ s3://your-cf-templates-bucket/templates/ \
-  --exclude "*.md" --exclude "README.md"
+  --exclude "*.md" --exclude "README.md" \
+  --region us-west-2
 
-# 2. Deploy stack (Development example)
+# 2. Deploy stack (Development example - us-west-2)
 aws cloudformation deploy \
   --template-file main.yaml \
   --stack-name bmc-hipaa-dev \
   --parameter-overrides file://environments/dev.json TemplateBucketName=your-cf-templates-bucket \
   --capabilities CAPABILITY_NAMED_IAM \
+  --region us-west-2 \
   --tags Compliance=HIPAA Application=BMC Environment=dev
 
-# 3. For Staging
+# 3. For Staging (us-west-2)
 aws cloudformation deploy \
   --template-file main.yaml \
   --stack-name bmc-hipaa-staging \
   --parameter-overrides file://environments/staging.json TemplateBucketName=your-cf-templates-bucket \
   --capabilities CAPABILITY_NAMED_IAM \
+  --region us-west-2 \
   --tags Compliance=HIPAA Application=BMC Environment=staging
 
-# 4. For Production
+# 4. For Production (us-west-2)
 aws cloudformation deploy \
   --template-file main.yaml \
   --stack-name bmc-hipaa-prod \
   --parameter-overrides file://environments/prod.json TemplateBucketName=your-cf-templates-bucket \
   --capabilities CAPABILITY_NAMED_IAM \
+  --region us-west-2 \
   --tags Compliance=HIPAA Application=BMC Environment=prod
 ```
 

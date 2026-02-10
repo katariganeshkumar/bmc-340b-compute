@@ -1,19 +1,19 @@
 [
   {
     "ParameterKey": "VpcId",
-    "ParameterValue": "vpc-dev-xxxxxxxxx"
+    "ParameterValue": "vpc-0ac6a3c566740c4bb"
   },
   {
     "ParameterKey": "PrivateSubnet1Id",
-    "ParameterValue": "subnet-dev-private1-xxxxx"
+    "ParameterValue": "subnet-xxxxxxxxxxxxx"
   },
   {
     "ParameterKey": "PrivateSubnet2Id",
-    "ParameterValue": "subnet-dev-private2-xxxxx"
+    "ParameterValue": "subnet-xxxxxxxxxxxxx"
   },
   {
     "ParameterKey": "PublicSubnet1Id",
-    "ParameterValue": "subnet-dev-public1-xxxxx"
+    "ParameterValue": "subnet-xxxxxxxxxxxxx"
   },
   {
     "ParameterKey": "InstanceType",
@@ -33,7 +33,7 @@
   },
   {
     "ParameterKey": "SSLCertificateARN",
-    "ParameterValue": "arn:aws:acm:region:account-id:certificate/certificate-id"
+    "ParameterValue": "arn:aws:acm:us-west-2:account-id:certificate/certificate-id"
   },
   {
     "ParameterKey": "AllowedCIDR",
